@@ -1,8 +1,11 @@
 import numpy
 import os
-from cellpose import models, io, core, utils
+
 from skimage.transform import resize
 import importlib.metadata
+
+import docker
+import shutil
 
 from cellprofiler_core.image import Image
 from cellprofiler_core.module.image_segmentation import ImageSegmentation
@@ -13,10 +16,12 @@ from cellprofiler_core.setting.do_something import DoSomething
 from cellprofiler_core.setting.subscriber import ImageSubscriber
 from cellprofiler_core.setting.text import Integer, ImageName, Directory, Filename, Float
 
+CELLPOSE_DOCKER_NAME = "ctromanscoia/cellpose:0.1"
+
 CUDA_LINK = "https://pytorch.org/get-started/locally/"
 Cellpose_link = " https://doi.org/10.1038/s41592-020-01018-x"
 Omnipose_link = "https://doi.org/10.1101/2021.11.03.467199"
-cellpose_ver = importlib.metadata.version('cellpose')
+
 
 __doc__ = f"""\
 RunCellpose
@@ -60,10 +65,8 @@ YES          YES          NO
 
 """
 
-
-
-model_dic = models.MODEL_NAMES
-model_dic.append('custom')
+MODEL_NAMES = ['cyto','nuclei','tissuenet','livecell', 'cyto2', 'general',
+                'CP', 'CPx', 'TN1', 'TN2', 'TN3', 'LC1', 'LC2', 'LC3', 'LC4', 'custom']
 
 
 class RunCellpose(ImageSegmentation):
@@ -79,6 +82,15 @@ class RunCellpose(ImageSegmentation):
 
     def create_settings(self):
         super(RunCellpose, self).create_settings()
+
+        self.docker_or_python = Choice(
+            text="Run CellPose in docker or local python environment",
+            choices=["Docker", "Python"],
+            value="Docker",
+            doc="""\
+
+""",
+        )
 
         self.expected_diameter = Integer(
             text="Expected object diameter",
@@ -96,7 +108,7 @@ detect much smaller objects it may be more efficient to resize the image first u
 
         self.mode = Choice(
             text="Detection mode",
-            choices= model_dic,
+            choices= MODEL_NAMES,
             value='cyto2',
             doc="""\
 CellPose comes with models for detecting nuclei or cells. Alternatively, you can supply a custom-trained model
@@ -306,10 +318,10 @@ The default is set to "Yes".
         ]
 
     def visible_settings(self):
-        if float(cellpose_ver[0:3]) >= 0.6 and int(cellpose_ver[0])<2:
-            vis_settings = [self.mode, self.omni, self.x_name]
-        else:
-            vis_settings = [self.mode, self.x_name]
+        # if float(cellpose_ver[0:3]) >= 0.6 and int(cellpose_ver[0])<2:
+        #     vis_settings = [self.mode, self.omni, self.x_name]
+        # else:
+        vis_settings = [self.mode, self.x_name]
 
         if self.mode.value != 'nuclei':
             vis_settings += [self.supply_nuclei]
@@ -357,25 +369,29 @@ The default is set to "Yes".
                 )
 
     def run(self, workspace):
-        if float(cellpose_ver[0:3]) >= 0.6 and int(cellpose_ver[0])<2:
-            if self.mode.value != 'custom':
-                model = models.Cellpose(model_type= self.mode.value,
-                                        gpu=self.use_gpu.value)
-            else:
-                model_file = self.model_file_name.value
-                model_directory = self.model_directory.get_absolute_path()
-                model_path = os.path.join(model_directory, model_file)
-                model = models.CellposeModel(pretrained_model=model_path, gpu=self.use_gpu.value)
+        if self.docker_or_python.value == "Python":
+            from cellpose import models, io, core, utils
+            cellpose_ver = importlib.metadata.version('cellpose')
+            
+            if float(cellpose_ver[0:3]) >= 0.6 and int(cellpose_ver[0])<2:
+                if self.mode.value != 'custom':
+                    model = models.Cellpose(model_type= self.mode.value,
+                                            gpu=self.use_gpu.value)
+                else:
+                    model_file = self.model_file_name.value
+                    model_directory = self.model_directory.get_absolute_path()
+                    model_path = os.path.join(model_directory, model_file)
+                    model = models.CellposeModel(pretrained_model=model_path, gpu=self.use_gpu.value)
 
-        else:
-            if self.mode.value != 'custom':
-                model = models.CellposeModel(model_type= self.mode.value,
-                                        gpu=self.use_gpu.value)
             else:
-                model_file = self.model_file_name.value
-                model_directory = self.model_directory.get_absolute_path()
-                model_path = os.path.join(model_directory, model_file)
-                model = models.CellposeModel(pretrained_model=model_path, gpu=self.use_gpu.value)
+                if self.mode.value != 'custom':
+                    model = models.CellposeModel(model_type= self.mode.value,
+                                            gpu=self.use_gpu.value)
+                else:
+                    model_file = self.model_file_name.value
+                    model_directory = self.model_directory.get_absolute_path()
+                    model_path = os.path.join(model_directory, model_file)
+                    model = models.CellposeModel(pretrained_model=model_path, gpu=self.use_gpu.value)
 
         if self.use_gpu.value and model.torch:
             from torch import cuda
@@ -537,6 +553,75 @@ The default is set to "Yes".
             message = "GPU test failed. There may be something wrong with your configuration."
         import wx
         wx.MessageBox(message, caption="GPU Test")
+
+    def run_docker(self):
+
+        client = docker.from_env()
+
+        # Download the Docker if it doesn't already exist
+        if not any(CELLPOSE_DOCKER_NAME in image.tags for image in client.images.list()):
+            print(f"{CELLPOSE_DOCKER_NAME} not found. Downloading...")
+            client.images.pull(CELLPOSE_DOCKER_NAME)
+            print(f"{CELLPOSE_DOCKER_NAME} downloaded successfully.")
+
+        # Name the container
+        container_name = "CellProfiler_CellPose_Plugin"
+        container = None
+
+        for c in client.containers.list():
+            if c.name == container_name:
+                container = c
+                break
+
+        cwd = os.getcwd()
+        transfer_dir = os.path.join(cwd, "data")
+
+        if not os.path.exists(cwd):
+            os.makedirs(transfer_dir)
+
+        if self.mode.value == 'custom':
+            custom_model_dir = os.path.join(transfer_dir, "model")
+            if not os.path.exists(custom_model_dir):
+               os.makedirs(custom_model_dir)
+            # Create a copy of the custom model
+            custom_model_file = self.model_file_name.value
+            custom_model_directory = self.model_directory.get_absolute_path()
+            custom_model_path = os.path.join(custom_model_directory, custom_model_file)
+            # Copy the custom model to the mounted volume
+            shutil.copy(custom_model_path, os.path.join(custom_model_dir, "custom_model"))
+
+        # Mount the temporary volume
+        volumes = {transfer_dir: {"bind": "/data", "mode": "rw"}}
+
+        if container is None:
+            print(f"{container_name} container not found. Starting...")
+            container = client.containers.run(
+                CELLPOSE_DOCKER_NAME, 
+                detach=True, 
+                name=container_name,
+                volumes=volumes,
+                remove=True,
+                tty=True,
+                )
+            print(f"{container_name} container started successfully.")
+
+
+    def construct_docker_command(self, workspace):
+        command = "cellpose --dir /data --verbose" 
+
+        # Use a pretrained model
+        if self.mode.value != 'custom':
+            command += f"--pretrained_model {self.mode.value}"
+        else:
+            command += f"--pretrained_model /data/model/custom_model"
+
+        if self.do_3D.value:
+            images = workspace.image_set
+            x = images.get_image(self.x_name.value)
+            anisotropy = x.spacing[0]/x.spacing[1]
+        
+
+
 
 
     def upgrade_settings(self, setting_values, variable_revision_number, module_name):
