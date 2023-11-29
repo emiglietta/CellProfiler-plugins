@@ -136,6 +136,7 @@ Select the project type which matches the project file specified by
         return visible_settings
 
     def run(self, workspace):
+        logger.info('correct file')
         image = workspace.image_set.get_image(self.x_name.value)
 
         x_data = image.pixel_data
@@ -160,11 +161,21 @@ Select the project type which matches the project file specified by
                 x_data
             )  # ilastik requires UINT8. Might be relaxed in future.
 
-            cmd += ["--export_source", "probabilities stage 2"]
+            cmd += ["--export_source", "probabilities\ stage\ 2"]
             # cmd += ["--export_source", "probabilities all stages"]
 
         cmd += ["--output_filename_format", fout.name, fin.name]
-
+        
+        cmd = f"""
+        C:\Program Files\ilastik-1.4.0rc8\ilastik.exe 
+        --headless 
+        --project 
+        C:\Users\ssivagur\Documents\Projects\OtherProjects\Vertex\ilastikclassifier\FirstAttempt.ilp 
+        --output_format hdf5 
+        --export_source Probabilities 
+        --output_filename_format 
+        {fout.name} {fin.name}
+        """
         try:
             with h5py.File(fin.name, "w") as f:
                 shape = x_data.shape
@@ -174,8 +185,11 @@ Select the project type which matches the project file specified by
             fin.close()
 
             fout.close()
-
-            subprocess.check_call(cmd)
+            logger.info('about to run subprocess')
+            #cmd = ' '.join(cmd)
+            logger.info(f'about to run {cmd}')
+            #subprocess.run(cmd)
+            subprocess.run(cmd.split(), text=True)
 
             with h5py.File(fout.name, "r") as f:
                 y_data = f["exported_data"][()]
@@ -190,15 +204,14 @@ Select the project type which matches the project file specified by
                 workspace.display_data.y_data = y_data
 
                 workspace.display_data.dimensions = image.dimensions
-        except subprocess.CalledProcessError as cpe:
-            logger.error(
-                "Command {} exited with status {}".format(cpe.output, cpe.returncode),
-                cpe,
-            )
-
-            raise cpe
         except IOError as ioe:
             raise ioe
+        except:
+            logger.error(
+                "something sad happened"
+            )
+
+
         finally:
             os.unlink(fin.name)
 
