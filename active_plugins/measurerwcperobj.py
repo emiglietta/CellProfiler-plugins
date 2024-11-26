@@ -260,6 +260,26 @@ measurements.
             RWC1 = numpy.zeros(len(lrange))
             RWC2 = numpy.zeros(len(lrange))
 
+            # Threshold as percentage of maximum intensity of objects in each channel
+            # Single threshold per object (it is calculated based on the highest pixel intensity in each object)
+            tff = (self.thr.value / 100) * fix(
+                scipy.ndimage.maximum(first_pixels, labels, lrange)
+            )
+            tss = (self.thr.value / 100) * fix(
+                scipy.ndimage.maximum(second_pixels, labels, lrange)
+            )
+
+            tot_fi_thr = scipy.ndimage.sum(
+                first_pixels[first_pixels >= tff[labels - 1]],
+                labels[first_pixels >= tff[labels - 1]],
+                lrange,
+            )
+            tot_si_thr = scipy.ndimage.sum(
+                second_pixels[second_pixels >= tss[labels - 1]],
+                labels[second_pixels >= tss[labels - 1]],
+                lrange,
+            )
+
             for label in labels:
                 # set first_pixels to only what's inside that label and rename --> first_pixels_perObj
                 # same with second_pixels to only what's inside that label and rename --> secoond_pixels_perObj
@@ -268,46 +288,39 @@ measurements.
                 # same with fi_thresh, si_thresh, combined_thresh, tot_fi_thr, tot_si_thr
                 # - move the 770 block inside this function after subsettingfirst_pixels and second_pixels
                 
-                ################# Block from 770 #############################
-                # Threshold as percentage of maximum intensity of objects in each channel
-                tff = (self.thr.value / 100) * fix(
-                    scipy.ndimage.maximum(first_pixels, labels, lrange)
-                )
-                tss = (self.thr.value / 100) * fix(
-                    scipy.ndimage.maximum(second_pixels, labels, lrange)
-                )
-
-                combined_thresh = (first_pixels >= tff[labels - 1]) & (
-                    second_pixels >= tss[labels - 1]
-                )
-                fi_thresh = first_pixels[combined_thresh]
-                si_thresh = second_pixels[combined_thresh]
-                tot_fi_thr = scipy.ndimage.sum(
-                    first_pixels[first_pixels >= tff[labels - 1]],
-                    labels[first_pixels >= tff[labels - 1]],
-                    lrange,
-                )
-                tot_si_thr = scipy.ndimage.sum(
-                    second_pixels[second_pixels >= tss[labels - 1]],
-                    labels[second_pixels >= tss[labels - 1]],
-                    lrange,
-                )
-                ################# Block from 770 #############################
+                #combined_thersh is an boolean array representing all the pixels in a single object, that is True in any pixel where BOTH fi and si are above their respective threshold
+                combined_thresh_perObj = (first_pixels[labels==label] > tff[labels==label]) & (second_pixels[labels==label] > tss[labels==label])
+                
                 #ASK BETH - in this case where no object has disjointed pixels, the order of the values of first_pixels matches the order of the objects. What would happen with disjointed objects?!
                 first_pixels_perObj = first_pixels[labels==label]
                 second_pixels_perObj = second_pixels[labels==label]
+                
+                # sum of the above-threshold (for both channels) pixel intensities per object
+                tot_fi_thr_perObj = scipy.ndimage.sum(
+                    first_pixels_perObj[first_pixels_perObj >= tff[label - 1]]
+                )
+                tot_si_thr_perObj = scipy.ndimage.sum(
+                    second_pixels_perObj[second_pixels_perObj >= tff[label - 1]]
+                )
 
-                Rank1_perObj = numpy.lexsort([first_pixels_perObj]) #array with a value assigned to each position according to ascending rank (0 is the rank of the lowest value)
+                #array of pixel values above threshold for the object
+                fi_thresh_obj = first_pixels_perObj[combined_thresh_perObj] 
+                si_thresh_obj = second_pixels_perObj[combined_thresh_perObj] 
+
+                #array with a value assigned to each position according to ascending rank (0 is the rank of the lowest value)
+                Rank1_perObj = numpy.lexsort([first_pixels_perObj]) 
                 Rank2_perObj = numpy.lexsort([second_pixels_perObj])
 
+                #ASK BETH! this is a boolean array that has False every time pixel i from first_pixels (the list of pixel values from all objects in order) is equal to pixel i+1
                 Rank1_U_perObj = numpy.hstack(
                     [[False], first_pixels_perObj[Rank1_perObj[:-1]] != first_pixels_perObj[Rank1_perObj[1:]]]
-                ) #ASK BETH! this is a boolean array that has False every time pixel i from first_pixels (the list of pixel values from all objects in order) is equal to pixel i+1
+                ) 
                 Rank2_U_perObj = numpy.hstack(
                     [[False], second_pixels_perObj[Rank2_perObj[:-1]] != second_pixels_perObj[Rank2_perObj[1:]]]
                 )
 
-                Rank1_S_perObj = numpy.cumsum(Rank1_U_perObj)  #ask BETH, array with cumulative number of 'True' in Rank1_U
+                # Array with cumulative number of 'True' in Rank1_U
+                Rank1_S_perObj = numpy.cumsum(Rank1_U_perObj)  
                 Rank2_S_perObj = numpy.cumsum(Rank2_U_perObj)
 
                 Rank_im1_perObj = numpy.zeros(first_pixels_perObj.shape, dtype=int)
@@ -321,19 +334,22 @@ measurements.
 
                 weight_perObj = (R_perObj - Di_perObj) * 1.0 / R_perObj
 
-                weight_thresh = weight_perObj[combined_thresh]
+                weight_thresh_perObj = weight_perObj[combined_thresh_perObj]
 
-                if numpy.any(combined_thresh):
+                # Calculate RWC only if any of the object pixels are above threshold
+                # ...which will always be the case since the thr is calculated as a % of the max intensity pixel in each object
+                # ...unless the above-threshold pixels on one channel don't match the ones on the other, so I guess it makes sense...
+                if numpy.any(combined_thresh_perObj):
                     RWC1 = numpy.array(
                         scipy.ndimage.sum(
-                            fi_thresh * weight_thresh, labels[combined_thresh], lrange
+                            fi_thresh_obj * weight_thresh_perObj
                         )
-                    ) / numpy.array(tot_fi_thr)
+                    ) / numpy.array(tot_fi_thr_perObj)
                     RWC2 = numpy.array(
                         scipy.ndimage.sum(
-                            si_thresh * weight_thresh, labels[combined_thresh], lrange
+                            si_thresh_obj * weight_thresh_perObj
                         )
-                    ) / numpy.array(tot_si_thr)
+                    ) / numpy.array(tot_si_thr_perObj)
                 
 
             result += [
