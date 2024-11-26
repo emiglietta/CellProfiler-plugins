@@ -27,6 +27,7 @@ from cellprofiler_core.setting.subscriber import (
 from cellprofiler_core.setting.text import Float
 from cellprofiler_core.utilities.core.object import size_similarly
 from centrosome.cpmorphology import fixup_scipy_ndimage_result as fix
+from cellprofiler_core.utilities.core.object import crop_labels_and_image
 
 LOGGER = logging.getLogger(__name__)
 
@@ -119,9 +120,9 @@ measurements.
     def visible_settings(self):
         result = [
             self.images_list,
+            self.objects_list,
             self.spacer,
             self.thr,
-            self.do_rwc,
             # self.images_or_objects,
         ]
         return result
@@ -235,6 +236,10 @@ measurements.
 
         n_objects = objects.count
         # Handle case when both images for the correlation are completely masked out
+        
+        # Threshold as percentage of maximum intensity in each channel
+        thr_fi = self.thr.value * numpy.max(fi) / 100
+        thr_si = self.thr.value * numpy.max(si) / 100
 
         if n_objects == 0:
             # corr = numpy.zeros((0,))
