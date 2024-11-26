@@ -259,46 +259,16 @@ measurements.
             # RWC Coefficient
             RWC1 = numpy.zeros(len(lrange))
             RWC2 = numpy.zeros(len(lrange))
+
             for label in labels:
-                # set first_pixels to only what's inside that label and rename
-                # same with second_pixels to only what's inside that label and rename
-                # same with labels to only what's inside that label and rename
+                # set first_pixels to only what's inside that label and rename --> first_pixels_perObj
+                # same with second_pixels to only what's inside that label and rename --> secoond_pixels_perObj
+                # same with labels to only what's inside that label and rename 
                 # same with lrange to only what's inside that label and rename
                 # same with fi_thresh, si_thresh, combined_thresh, tot_fi_thr, tot_si_thr
                 # - move the 770 block inside this function after subsettingfirst_pixels and second_pixels
-                    
-                [Rank1] = numpy.lexsort(([labels], [first_pixels]))
-                [Rank2] = numpy.lexsort(([labels], [second_pixels]))
-                Rank1_U = numpy.hstack(
-                    [[False], first_pixels[Rank1[:-1]] != first_pixels[Rank1[1:]]]
-                )
-                Rank2_U = numpy.hstack(
-                    [[False], second_pixels[Rank2[:-1]] != second_pixels[Rank2[1:]]]
-                )
-                Rank1_S = numpy.cumsum(Rank1_U)
-                Rank2_S = numpy.cumsum(Rank2_U)
-                Rank_im1 = numpy.zeros(first_pixels.shape, dtype=int)
-                Rank_im2 = numpy.zeros(second_pixels.shape, dtype=int)
-                Rank_im1[Rank1] = Rank1_S
-                Rank_im2[Rank2] = Rank2_S
-
-                R = max(Rank_im1.max(), Rank_im2.max()) + 1
-                Di = abs(Rank_im1 - Rank_im2)
-                weight = (R - Di) * 1.0 / R
-                weight_thresh = weight[combined_thresh]
-
-                if numpy.any(combined_thresh):
-                    RWC1 = numpy.array(
-                        scipy.ndimage.sum(
-                            fi_thresh * weight_thresh, labels[combined_thresh], lrange
-                        )
-                    ) / numpy.array(tot_fi_thr)
-                    RWC2 = numpy.array(
-                        scipy.ndimage.sum(
-                            si_thresh * weight_thresh, labels[combined_thresh], lrange
-                        )
-                    ) / numpy.array(tot_si_thr)
                 
+                ################# Block from 770 #############################
                 # Threshold as percentage of maximum intensity of objects in each channel
                 tff = (self.thr.value / 100) * fix(
                     scipy.ndimage.maximum(first_pixels, labels, lrange)
@@ -322,6 +292,49 @@ measurements.
                     labels[second_pixels >= tss[labels - 1]],
                     lrange,
                 )
+                ################# Block from 770 #############################
+                #ASK BETH - in this case where no object has disjointed pixels, the order of the values of first_pixels matches the order of the objects. What would happen with disjointed objects?!
+                first_pixels_perObj = first_pixels[labels==label]
+                second_pixels_perObj = second_pixels[labels==label]
+
+                Rank1_perObj = numpy.lexsort([first_pixels_perObj]) #array with a value assigned to each position according to ascending rank (0 is the rank of the lowest value)
+                Rank2_perObj = numpy.lexsort([second_pixels_perObj])
+
+                Rank1_U_perObj = numpy.hstack(
+                    [[False], first_pixels_perObj[Rank1_perObj[:-1]] != first_pixels_perObj[Rank1_perObj[1:]]]
+                ) #ASK BETH! this is a boolean array that has False every time pixel i from first_pixels (the list of pixel values from all objects in order) is equal to pixel i+1
+                Rank2_U_perObj = numpy.hstack(
+                    [[False], second_pixels_perObj[Rank2_perObj[:-1]] != second_pixels_perObj[Rank2_perObj[1:]]]
+                )
+
+                Rank1_S_perObj = numpy.cumsum(Rank1_U_perObj)  #ask BETH, array with cumulative number of 'True' in Rank1_U
+                Rank2_S_perObj = numpy.cumsum(Rank2_U_perObj)
+
+                Rank_im1_perObj = numpy.zeros(first_pixels_perObj.shape, dtype=int)
+                Rank_im2_perObj = numpy.zeros(second_pixels_perObj.shape, dtype=int)
+
+                Rank_im1_perObj[Rank1_perObj] = Rank1_S_perObj
+                Rank_im2_perObj[Rank2_perObj] = Rank2_S_perObj
+
+                R_perObj = max(Rank_im1_perObj.max(), Rank_im2_perObj.max()) + 1
+                Di_perObj = abs(Rank_im1_perObj - Rank_im2_perObj)
+
+                weight_perObj = (R_perObj - Di_perObj) * 1.0 / R_perObj
+
+                weight_thresh = weight_perObj[combined_thresh]
+
+                if numpy.any(combined_thresh):
+                    RWC1 = numpy.array(
+                        scipy.ndimage.sum(
+                            fi_thresh * weight_thresh, labels[combined_thresh], lrange
+                        )
+                    ) / numpy.array(tot_fi_thr)
+                    RWC2 = numpy.array(
+                        scipy.ndimage.sum(
+                            si_thresh * weight_thresh, labels[combined_thresh], lrange
+                        )
+                    ) / numpy.array(tot_si_thr)
+                
 
             result += [
                 [
